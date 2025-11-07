@@ -21,9 +21,9 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@bizflow/db": "workspace:*",
     "better-auth": "catalog:",
     "dotenv": "catalog:",
-    "zod": "catalog:",
-    "@bizflow/db": "workspace:*"
+    "zod": "catalog:"
   }
 }
