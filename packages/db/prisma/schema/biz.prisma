@@ -1,0 +1,333 @@
+// ============================================
+// BUSINESS UNITS
+// ============================================
+
+// Each distinct business your friend operates
+// Flexible design allows adding new businesses easily
+model BusinessUnit {
+    id            String             @id @default(cuid())
+    name          String             @unique
+    type          BusinessType
+    recordingFreq RecordingFrequency // Daily or Weekly
+    description   String?
+    isActive      Boolean            @default(true)
+    createdAt     DateTime           @default(now())
+    updatedAt     DateTime           @updatedAt
+
+    // Relations
+    dailyTransactions  DailyTransaction[]
+    weeklyTransactions WeeklyTransaction[]
+    otherExpenses      OtherExpense[] // Expenses specific to this business
+
+    @@map("business_units")
+}
+
+enum BusinessType {
+    MENS_SALON
+    WOMENS_SALON
+    POPCORN
+    BIKE_RENTAL
+    WIFI
+    NAILS // Manicure and pedicure
+    OTHER // Future businesses
+}
+
+enum RecordingFrequency {
+    DAILY
+    WEEKLY
+}
+
+// ============================================
+// TRANSACTION TRACKING
+// ============================================
+
+// Daily transactions - primarily for the bike rental business
+// Records money made each day with automatic deductions
+model DailyTransaction {
+    id             String       @id @default(cuid())
+    businessUnitId String
+    businessUnit   BusinessUnit @relation(fields: [businessUnitId], references: [id], onDelete: Restrict)
+
+    date           DateTime @db.Date
+    moneyMade      Decimal  @db.Decimal(12, 2) // Total money brought in
+    fixedDeduction Decimal  @db.Decimal(12, 2) // The 2000 deduction
+    bikeExpenses   Decimal  @default(0) @db.Decimal(12, 2) // Expenses on bike that day
+
+    // Calculated field: moneyMade - fixedDeduction - bikeExpenses
+    // We store this for performance and historical accuracy
+    netAmount Decimal @db.Decimal(12, 2)
+
+    notes     String?
+    createdBy String
+    creator   User     @relation(fields: [createdBy], references: [id])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Ensure no duplicate entries for same business on same day
+    @@unique([businessUnitId, date])
+    @@index([businessUnitId, date])
+    @@map("daily_transactions")
+}
+
+// Weekly transactions - for businesses that record weekly totals
+// Mens salon, womens salon, popcorn, nails, wifi
+model WeeklyTransaction {
+    id             String       @id @default(cuid())
+    businessUnitId String
+    businessUnit   BusinessUnit @relation(fields: [businessUnitId], references: [id], onDelete: Restrict)
+
+    weekStart    DateTime @db.Date // Monday of the week
+    weekEnd      DateTime @db.Date // Sunday of the week
+    totalRevenue Decimal  @db.Decimal(12, 2)
+
+    notes     String?
+    createdBy String
+    creator   User     @relation(fields: [createdBy], references: [id])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Ensure no overlapping weeks for same business
+    @@unique([businessUnitId, weekStart])
+    @@index([businessUnitId, weekStart, weekEnd])
+    @@map("weekly_transactions")
+}
+
+// ============================================
+// EMPLOYEE MANAGEMENT
+// ============================================
+
+// All employees regardless of payment frequency
+model Employee {
+    id          String      @id @default(cuid())
+    name        String
+    paymentType PaymentType
+
+    // For weekly employees - rate per day
+    dailyRate Decimal? @db.Decimal(10, 2)
+
+    // For monthly employees - fixed monthly salary
+    monthlySalary Decimal? @db.Decimal(10, 2)
+
+    isActive        Boolean   @default(true)
+    hireDate        DateTime  @db.Date
+    terminationDate DateTime? @db.Date
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Relations
+    weeklyRecords  EmployeeWeeklyRecord[]
+    monthlyRecords EmployeeMonthlyRecord[]
+
+    @@map("employees")
+}
+
+enum PaymentType {
+    WEEKLY
+    MONTHLY
+}
+
+// Weekly payment records for employees paid weekly
+// Formula: (daysWorked * dailyRate) - (withdrawals + expenses)
+model EmployeeWeeklyRecord {
+    id         String   @id @default(cuid())
+    employeeId String
+    employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+    weekStart DateTime @db.Date
+    weekEnd   DateTime @db.Date
+
+    daysWorked  Int // Number of days employee worked this week
+    withdrawals Decimal @default(0) @db.Decimal(10, 2) // Money withdrawn during week
+    expenses    Decimal @default(0) @db.Decimal(10, 2) // Expenses incurred by employee
+
+    // Calculated: (daysWorked * employee.dailyRate) - (withdrawals + expenses)
+    totalPay Decimal @db.Decimal(10, 2)
+
+    notes    String?
+    isPaid   Boolean   @default(false) // Track if payment was made
+    paidDate DateTime? @db.Date
+
+    createdBy String
+    creator   User     @relation(fields: [createdBy], references: [id])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([employeeId, weekStart])
+    @@index([employeeId, weekStart, weekEnd])
+    @@map("employee_weekly_records")
+}
+
+// Monthly payment records for employees paid monthly
+model EmployeeMonthlyRecord {
+    id         String   @id @default(cuid())
+    employeeId String
+    employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+    month Int // 1-12
+    year  Int
+
+    baseSalary Decimal @db.Decimal(10, 2) // Can differ from default if adjusted
+    deductions Decimal @default(0) @db.Decimal(10, 2)
+    bonuses    Decimal @default(0) @db.Decimal(10, 2)
+
+    // Calculated: baseSalary - deductions + bonuses
+    totalPay Decimal @db.Decimal(10, 2)
+
+    notes    String?
+    isPaid   Boolean   @default(false)
+    paidDate DateTime? @db.Date
+
+    createdBy String
+    creator   User     @relation(fields: [createdBy], references: [id])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([employeeId, month, year])
+    @@index([employeeId, year, month])
+    @@map("employee_monthly_records")
+}
+
+// ============================================
+// EXPENSE TRACKING
+// ============================================
+
+// Fixed recurring expenses (rent, wifi provider, etc.)
+model FixedExpense {
+    id        String           @id @default(cuid())
+    name      String // e.g., "Mens Salon Rent", "Wifi Provider Payment"
+    category  ExpenseCategory
+    amount    Decimal          @db.Decimal(10, 2)
+    frequency ExpenseFrequency
+
+    // For monthly expenses, which day of month (1-31)
+    dayOfMonth Int?
+
+    // For weekly expenses, which day of week (0-6, 0=Sunday)
+    dayOfWeek Int?
+
+    description String?
+    isActive    Boolean   @default(true)
+    startDate   DateTime  @db.Date
+    endDate     DateTime? @db.Date // Null means ongoing
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Actual payments made
+    payments FixedExpensePayment[]
+
+    @@map("fixed_expenses")
+}
+
+enum ExpenseCategory {
+    RENT
+    UTILITIES
+    WIFI
+    INSURANCE
+    MAINTENANCE
+    OTHER
+}
+
+enum ExpenseFrequency {
+    WEEKLY
+    MONTHLY
+    QUARTERLY
+    YEARLY
+}
+
+// Track actual payments of fixed expenses
+// This allows tracking if a payment was made vs just planned
+model FixedExpensePayment {
+    id             String       @id @default(cuid())
+    fixedExpenseId String
+    fixedExpense   FixedExpense @relation(fields: [fixedExpenseId], references: [id], onDelete: Cascade)
+
+    dueDate    DateTime  @db.Date
+    paidDate   DateTime? @db.Date
+    amountPaid Decimal   @db.Decimal(10, 2)
+    isPaid     Boolean   @default(false)
+
+    notes     String?
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([fixedExpenseId, dueDate])
+    @@map("fixed_expense_payments")
+}
+
+// One-off or irregular expenses
+model OtherExpense {
+    id          String          @id @default(cuid())
+    date        DateTime        @db.Date
+    amount      Decimal         @db.Decimal(10, 2)
+    category    ExpenseCategory
+    description String
+
+    // Optional - link to specific business if relevant
+    businessUnitId String?
+    businessUnit   BusinessUnit? @relation(fields: [businessUnitId], references: [id], onDelete: SetNull)
+
+    receiptUrl String? // Could store receipt images later
+
+    createdBy String
+    creator   User     @relation(fields: [createdBy], references: [id])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([date])
+    @@index([businessUnitId])
+    @@map("other_expenses")
+}
+
+// ============================================
+// AUDIT & COMPLIANCE
+// ============================================
+
+// Complete audit trail of all changes to financial records
+// Critical for accountability and debugging
+model AuditLog {
+    id     String @id @default(cuid())
+    userId String
+    user   User   @relation(fields: [userId], references: [id])
+
+    action     AuditAction
+    entityType String // "DailyTransaction", "Employee", etc.
+    entityId   String // ID of the affected record
+
+    // Store what changed
+    oldValues Json? // Previous values before change
+    newValues Json? // New values after change
+
+    ipAddress String?
+    userAgent String?
+
+    timestamp DateTime @default(now())
+
+    @@index([userId, timestamp])
+    @@index([entityType, entityId])
+    @@index([timestamp])
+    @@map("audit_logs")
+}
+
+enum AuditAction {
+    CREATE
+    UPDATE
+    DELETE
+    VIEW // For sensitive operations
+}
+
+// ============================================
+// SYSTEM SETTINGS
+// ============================================
+
+// Store application-wide settings
+model SystemSetting {
+    id          String   @id @default(cuid())
+    key         String   @unique
+    value       String
+    description String?
+    updatedAt   DateTime @updatedAt
+
+    @@map("system_settings")
+}
